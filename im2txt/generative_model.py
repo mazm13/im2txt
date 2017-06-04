@@ -25,6 +25,7 @@ from __future__ import print_function
 
 
 import tensorflow as tf
+import numpy as np
 
 from ops import image_embedding
 from ops import image_processing
@@ -78,6 +79,16 @@ class GenerativeModel(object):
 
     # Generated sentences list for images
     self.fake_seqs = []
+
+    # Lengths of generated sentences
+    self.fake_lens = []
+
+    # Generated sentences of word probs. A float32 Tensor with shape 
+    #   [batch_size, max_length, vocab_size], i.e. [4, 20, 12000]
+    self.fake_seqs_probs = None
+
+    # Lengths Tensor of generated sentences
+    self.fake_lens_tensor = None
 
     # A float32 Tensor with shape [batch_size, embedding_size].
     self.image_embeddings = None
@@ -199,6 +210,9 @@ class GenerativeModel(object):
     self.inception_variables = tf.get_collection(
         tf.GraphKeys.GLOBAL_VARIABLES, scope="InceptionV3")
 
+    # Collect all variables in MLE(Show and Tell)
+    self.var_list.extend(self.inception_variables)
+
     # Map inception output into embedding space.
     with tf.variable_scope("image_embedding") as scope:
       image_embeddings = tf.contrib.layers.fully_connected(
@@ -208,6 +222,11 @@ class GenerativeModel(object):
           weights_initializer=self.initializer,
           biases_initializer=None,
           scope=scope)
+
+    image_embedding_variables = tf.get_collection(
+        tf.GraphKeys.GLOBAL_VARIABLES, scope="image_embedding")
+    # Collect all variables in MLE(Show and Tell)
+    self.var_list.extend(image_embedding_variables)
 
     # Save the embedding size in the graph.
     tf.constant(self.config.embedding_size, name="embedding_size")
@@ -221,6 +240,11 @@ class GenerativeModel(object):
           shape=[self.config.vocab_size, self.config.embedding_size],
           initializer=self.initializer)
 
+    seq_embedding_variables = tf.get_collection(
+        tf.GraphKeys.GLOBAL_VARIABLES, scope="seq_embedding")
+    # Collect all variables in MLE(Show and Tell)
+    self.var_list.extend(seq_embedding_variables)
+
   def word_embedding(self, word_id):
     word_id = tf.expand_dims(word_id, 0)
     with tf.variable_scope("seq_embedding", reuse=True), tf.device("/cpu:0"):
@@ -233,14 +257,9 @@ class GenerativeModel(object):
 
     Inputs:
       self.image_embeddings
-      self.seq_embeddings
-      self.target_seqs (training and eval only)
-      self.input_mask (training and eval only)
 
     Outputs:
-      self.total_loss (training and eval only)
-      self.target_cross_entropy_losses (training and eval only)
-      self.target_cross_entropy_loss_weights (training and eval only)
+      self.fake_seqs
     """
     # This LSTM cell has biases and outputs tanh(new_c) * sigmoid(o), but the
     # modified LSTM in the "Show and Tell" paper has no biases and outputs
@@ -253,10 +272,12 @@ class GenerativeModel(object):
           input_keep_prob=self.config.lstm_dropout_keep_prob,
           output_keep_prob=self.config.lstm_dropout_keep_prob)
 
+    fake_seqs_probs = []
     # Generate sentences of each image one by one
     for i in range(self.image_embeddings.get_shape()[0]):
       # Fetch ith image embedding of image_embeddings
       image_embedding_ = self.image_embeddings[i,:]
+      image_embedding_ = tf.expand_dims(image_embedding_, 0)
       with tf.variable_scope("lstm", initializer=self.initializer) as lstm_scope:
         # Share variables for i > 0
         if i > 0: lstm_scope.reuse_variables()
@@ -264,14 +285,19 @@ class GenerativeModel(object):
         zero_state = lstm_cell.zero_state(batch_size=1, dtype=tf.float32)
         _, initial_state = lstm_cell(image_embedding_, zero_state)
 
-      sentence = [self.vocab.start_id]
+      start_id = tf.constant(self.vocab.start_id, dtype=tf.int64)
+      sentence = [start_id]
+      length = 20
 
-      lstm_inputs = self.word_embedding(self.vocab.start_id)
+      lstm_inputs = self.word_embedding(start_id)
       lstm_state = initial_state
-      for j in range(self.config.max_length):
+
+      sentence_probs = [tf.one_hot(start_id, depth=self.config.vocab_size)]
+
+      for j in range(self.config.max_length - 1):
         with tf.variable_scope("lstm", reuse=True) as lstm_scope:
-          lstm_outputs, state_tuple = lstm(
-              inputs=tf.squeeze(lstm_inputs, [1]),
+          lstm_outputs, state_tuple = lstm_cell(
+              inputs=lstm_inputs,
               state=lstm_state)
         with tf.variable_scope("logits") as logits_scope:
           if i > 0 or j > 0: logits_scope.reuse_variables()
@@ -281,19 +307,48 @@ class GenerativeModel(object):
               activation_fn=None,
               weights_initializer=self.initializer,
               scope=logits_scope)
-        logits = tf.nn.softmax(logits[0])
-        index = tf.argmax(logits)
+        logits = tf.nn.log_softmax(logits[0])
+
+        # Do gumbel-softmax 
+        gumbel_noise = np.random.gumbel(0.0,1.0,size=logits.get_shape())
+        gumbel = logits + gumbel_noise
+        index = tf.argmax(gumbel)
+
+        sentence_probs.append(tf.nn.softmax(gumbel / self.config.gumbel_temperature))
 
         sentence.append(index)
 
-        if index == self.vocab.end_id:
-          break;
-        else:
-          lstm_inputs = self.word_embedding(index)
-          lstm_state = state_tuple
+        lstm_inputs = self.word_embedding(index)
+        lstm_state = state_tuple
 
+      # With considering that there is must no if condition in TensorFlow
+      # So we find the first end_id in sentence
+      # And there may be no end_id in sentence, so we add end_id in sentence
+      end_id = tf.constant(self.vocab.end_id, dtype=tf.int64)
+      sentence_ = sentence
+      sentence_.append(end_id)
+
+      length = tf.reduce_min(tf.where(tf.equal(tf.stack(sentence_), end_id)))
+      length = tf.reduce_min([length+1, 20])
+
+      fake_seqs_probs.append(sentence_probs)
+
+      self.fake_lens.append(length)
       self.fake_seqs.append(sentence)
+      
 
+    self.fake_seqs_probs = tf.stack(fake_seqs_probs)
+    print("fake_seqs_probs shape: %s", str(self.fake_seqs_probs.get_shape()))
+    self.fake_lens_tensor = tf.stack(self.fake_lens)
+    print("fake_lens_tensor shape: %s", str(self.fake_lens_tensor.get_shape()))
+
+    lstmed_variables = tf.get_collection(
+        tf.GraphKeys.GLOBAL_VARIABLES, scope="lstm")
+    logits_variables = tf.get_collection(
+        tf.GraphKeys.GLOBAL_VARIABLES, scope="logits")
+    # Collect all variables in MLE(Show and Tell)
+    self.var_list.extend(lstmed_variables)
+    self.var_list.extend(logits_variables)
 
   def setup_inception_initializer(self):
     """Sets up the function to restore inception variables from checkpoint."""
@@ -311,8 +366,8 @@ class GenerativeModel(object):
   def setup_generator_initializer(self):
     """Sets up the function to restore generator variables from MLE checkpoint."""
     if self.mode != "inference":
-      # Restore inception variables only.
-      saver = tf.train.Saver()
+      # Restore MLE variables only.
+      saver = tf.train.Saver(self.var_list)
 
       def restore_fn(sess):
         tf.logging.info("Restoring Inception variables from checkpoint file %s",

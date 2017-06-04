@@ -5,3 +5,8 @@
 /bazel-im2txt
 /bazel-testlogs
 /bazel-tf
+/im2txt/ckpt_file/
+/im2txt/model
+
+*_test.py
+*.pyc

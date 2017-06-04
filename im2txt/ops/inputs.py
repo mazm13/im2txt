@@ -180,7 +180,7 @@ def batch_with_dynamic_pad(images_and_captions,
   """
   enqueue_list = []
   for image, caption in images_and_captions:
-    caption_length = tf.shape(caption)[0]
+    caption_length = tf.shape(caption)
     indicator = tf.ones(caption_length, dtype=tf.int32)
     enqueue_list.append([image, caption, indicator])
 

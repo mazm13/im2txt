@@ -34,30 +34,55 @@ def main(unused_argv):
   model_config = configuration.ModelConfig()
   model_config.input_file_pattern = "/media/mazm13/mscoco/train-?????-of-00256"
   model_config.mle_checkpoint_file = "./ckpt_file/train/model.ckpt-457157"
-  model.config.vocab_file = "/media/mazm13/mscoco/word_counts.txt"
+  model_config.vocab_file = "/media/mazm13/mscoco/word_counts.txt"
   training_config = configuration.TrainingConfig()
 
   # Create training directory.
-  train_dir = FLAGS.train_dir
+  train_dir = "./model/train/"
   if not tf.gfile.IsDirectory(train_dir):
     tf.logging.info("Creating training directory: %s", train_dir)
     tf.gfile.MakeDirs(train_dir)
+
+  # Create training directory.
+  log_dir = "./model/log/"
+  if not tf.gfile.IsDirectory(log_dir):
+    tf.logging.info("Creating logging directory: %s", log_dir)
+    tf.gfile.MakeDirs(log_dir)  
 
   # Build the TensorFlow graph.
   g = tf.Graph()
   with g.as_default():
     # Build the model.
     model = generative_model.GenerativeModel(
-        model_config, mode="train", train_inception=FLAGS.train_inception)
+        model_config, mode="train", train_inception=False)
     model.build()
 
+    saver = tf.train.Saver(max_to_keep=training_config.max_checkpoints_to_keep)
+    merge = tf.summary.merge_all()
+
   with tf.Session(graph=g) as sess:
+    tf.global_variables_initializer().run()
     model.init_fn(sess)
+    coord = tf.train.Coordinator()
+    threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+    writer = tf.summary.FileWriter(log_dir, sess.graph)
+
     for i in xrange(20):
-      sentences = tf.sess.run(model.fake_seqs)
-      for sentence in sentences:
-        nl_sen = [model.vocab.id_to_word(word_id) for word_id in sentence]
-        print nl_sen
+      print("============================")
+      print("Generate %dth sentences" % i)
+      real, sentences, lens, summary_str = sess.run([model.real_seqs, model.fake_seqs, model.fake_lens, merge])
+      writer.add_summary(summary_str, i)
+      for j in range(len(real)):
+        real_sens = ""
+        for word_id in real[j]: 
+          real_sens += model.vocab.id_to_word(word_id) + " "
+        print("Real: %s" % real_sens)
+        fake_sens = ""
+        for k in range(lens[j]):
+          fake_sens += model.vocab.id_to_word(sentences[j][k]) + " "
+        print("Fake(len:%d): %s" % (lens[j], fake_sens))
+    saver.save(sess, train_dir+"model.ckpt")
 
 if __name__ == "__main__":
   tf.app.run()

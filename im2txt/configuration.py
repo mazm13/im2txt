@@ -56,7 +56,7 @@ class ModelConfig(object):
     self.num_preprocess_threads = 4
 
     # Batch size.
-    self.batch_size = 32
+    self.batch_size = 4
 
     # File containing an Inception v3 checkpoint to initialize the variables
     # of the Inception model. Must be provided when starting training for the
@@ -79,6 +79,9 @@ class ModelConfig(object):
 
     # max length of generated sentence
     self.max_length = 20
+
+    # temperature for gumbel-softmax in Generative model
+    self.gumbel_temperature = 0.5
 
 class TrainingConfig(object):
   """Wrapper class for training hyperparameters."""
