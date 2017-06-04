@@ -87,11 +87,14 @@ class GenerativeModel(object):
     #   [batch_size, max_length, vocab_size], i.e. [4, 20, 12000]
     self.fake_seqs_probs = None
 
-    # Lengths Tensor of generated sentences
+    # Lengths Tensor of generated sentences. A int32 Tensor with shape [batch_size,]
     self.fake_lens_tensor = None
 
     # A float32 Tensor with shape [batch_size, embedding_size].
     self.image_embeddings = None
+
+    # A float32 Tensor with shape [batch_size, inception_v3_output_size], i.e. [4, 2048]
+    self.inception_output = None
 
     # A float32 Tensor with shape [batch_size, padded_length, embedding_size].
     self.seq_embeddings = None
@@ -209,6 +212,9 @@ class GenerativeModel(object):
         is_training=self.is_training())
     self.inception_variables = tf.get_collection(
         tf.GraphKeys.GLOBAL_VARIABLES, scope="InceptionV3")
+
+    # Save inception output for Descrimitive model
+    self.inception_output = inception_output
 
     # Collect all variables in MLE(Show and Tell)
     self.var_list.extend(self.inception_variables)
@@ -338,9 +344,7 @@ class GenerativeModel(object):
       
 
     self.fake_seqs_probs = tf.stack(fake_seqs_probs)
-    print("fake_seqs_probs shape: %s", str(self.fake_seqs_probs.get_shape()))
     self.fake_lens_tensor = tf.stack(self.fake_lens)
-    print("fake_lens_tensor shape: %s", str(self.fake_lens_tensor.get_shape()))
 
     lstmed_variables = tf.get_collection(
         tf.GraphKeys.GLOBAL_VARIABLES, scope="lstm")
@@ -385,6 +389,11 @@ class GenerativeModel(object):
         collections=[tf.GraphKeys.GLOBAL_STEP, tf.GraphKeys.GLOBAL_VARIABLES])
 
     self.global_step = global_step
+
+  def output(self):
+    real_lens = tf.reduce_sum(self.real_mask, 1)
+    return self.inception_output, self.real_seqs, real_lens, 
+        self.fake_seqs_probs, self.fake_lens_tensor
 
   def build(self):
     """Creates all ops for training and evaluation."""
