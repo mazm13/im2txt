@@ -103,7 +103,7 @@ def process_image(encoded_image,
     else:
       raise ValueError("Invalid image format: %s" % image_format)
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-  image_summary("original_image", image)
+  #image_summary("original_image", image)
 
   # Resize image.
   assert (resize_height > 0) == (resize_width > 0)
@@ -119,13 +119,13 @@ def process_image(encoded_image,
     # Central crop, assuming resize_height > height, resize_width > width.
     image = tf.image.resize_image_with_crop_or_pad(image, height, width)
 
-  image_summary("resized_image", image)
+  #image_summary("resized_image", image)
 
   # Randomly distort the image.
   if is_training:
     image = distort_image(image, thread_id)
 
-  image_summary("final_image", image)
+  #image_summary("final_image", image)
 
   # Rescale to [-1,1] instead of [0, 1]
   image = tf.subtract(image, 0.5)

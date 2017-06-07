@@ -68,6 +68,9 @@ class GenerativeModel(object):
     # A float32 Tensor with shape [batch_size, height, width, channels].
     self.images = None
 
+    # A float32 Tensor with shape [batch_size,]
+    self.image_ids = None
+
     # An int32 Tensor with shape [batch_size, padded_length], for INFERENCE mode.
     self.input_seqs = None
 
@@ -176,23 +179,24 @@ class GenerativeModel(object):
       images_and_captions = []
       for thread_id in range(self.config.num_preprocess_threads):
         serialized_sequence_example = input_queue.dequeue()
-        encoded_image, caption = input_ops.parse_sequence_example(
+        encoded_image, image_id, caption = input_ops.parse_sequence_example(
             serialized_sequence_example,
             image_feature=self.config.image_feature_name,
             caption_feature=self.config.caption_feature_name)
         image = self.process_image(encoded_image, thread_id=thread_id)
-        images_and_captions.append([image, caption])
+        images_and_captions.append([image, image_id, caption])
 
       # Batch inputs.
       queue_capacity = (2 * self.config.num_preprocess_threads *
                         self.config.batch_size)
-      images, real_seqs, real_mask = (
+      images, image_ids, real_seqs, real_mask = (
           input_ops.batch_with_dynamic_pad(images_and_captions,
                                            batch_size=self.config.batch_size,
                                            queue_capacity=queue_capacity))
       input_seqs = None
 
     self.images = images
+    self.image_ids = image_ids
     self.real_seqs = real_seqs
     self.real_mask = real_mask
     self.input_seqs = input_seqs
@@ -313,7 +317,8 @@ class GenerativeModel(object):
               activation_fn=None,
               weights_initializer=self.initializer,
               scope=logits_scope)
-        logits = tf.nn.log_softmax(logits[0])
+        # Multiply a \Beta before category distribution, \Beta = 3
+        logits = tf.nn.log_softmax(3 * logits[0])
 
         # Do gumbel-softmax 
         gumbel_noise = np.random.gumbel(0.0,1.0,size=logits.get_shape())
@@ -392,7 +397,7 @@ class GenerativeModel(object):
 
   def output(self):
     real_lens = tf.reduce_sum(self.real_mask, 1)
-    return self.inception_output, self.real_seqs, real_lens, 
+    return self.inception_output, self.real_seqs, real_lens, \
         self.fake_seqs_probs, self.fake_lens_tensor
 
   def build(self):

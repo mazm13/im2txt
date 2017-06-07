@@ -40,15 +40,17 @@ def parse_sequence_example(serialized, image_feature, caption_feature):
   context, sequence = tf.parse_single_sequence_example(
       serialized,
       context_features={
-          image_feature: tf.FixedLenFeature([], dtype=tf.string)
+          image_feature: tf.FixedLenFeature([], dtype=tf.string),
+          "image/image_id": tf.FixedLenFeature([], dtype=tf.int64)
       },
       sequence_features={
           caption_feature: tf.FixedLenSequenceFeature([], dtype=tf.int64),
       })
 
   encoded_image = context[image_feature]
+  image_id = context['image/image_id']
   caption = sequence[caption_feature]
-  return encoded_image, caption
+  return encoded_image, image_id, caption
 
 
 def prefetch_input_data(reader,
@@ -179,12 +181,12 @@ def batch_with_dynamic_pad(images_and_captions,
     mask: An int32 0/1 Tensor of shape [batch_size, padded_length].
   """
   enqueue_list = []
-  for image, caption in images_and_captions:
+  for image, image_id, caption in images_and_captions:
     caption_length = tf.shape(caption)
     indicator = tf.ones(caption_length, dtype=tf.int32)
-    enqueue_list.append([image, caption, indicator])
+    enqueue_list.append([image, image_id, caption, indicator])
 
-  images, real_seqs, mask = tf.train.batch_join(
+  images, image_ids, real_seqs, mask = tf.train.batch_join(
       enqueue_list,
       batch_size=batch_size,
       capacity=queue_capacity,
@@ -197,4 +199,4 @@ def batch_with_dynamic_pad(images_and_captions,
     tf.summary.scalar("caption_length/batch_max", tf.reduce_max(lengths))
     tf.summary.scalar("caption_length/batch_mean", tf.reduce_mean(lengths))
 
-  return images, real_seqs, mask
+  return images, image_ids, real_seqs, mask
