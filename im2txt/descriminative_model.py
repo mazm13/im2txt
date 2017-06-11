@@ -43,6 +43,7 @@ class DescriminativeModel(object):
         maxval=self.config.initializer_scale)
 
     # A float32 Tensor with shape [batch_size, embedding_size]
+    # Now we get if from Generator
     self.image_embeddings = None
 
     self.var_list = []
@@ -71,7 +72,9 @@ class DescriminativeModel(object):
 
     # Delete <S> and </S> in a sentence
 
-    self.inception_output = input_list[0]
+    #self.inception_output = input_list[0]
+    self.image_embeddings = input_list[0]
+
     self.real_seqs = input_list[1][:,1:]
     self.real_lens = input_list[2] - 2
     self.fake_seqs = input_list[3][:,1:,:]
@@ -176,9 +179,7 @@ class DescriminativeModel(object):
         zeros = tf.zeros(self.image_embeddings.get_shape())
         _, initial_state = lstm_cell(zeros, zero_state)
 
-        # Allow lstm variables to be reused
-        lstm_scope.reuse_variables()
-
+      with tf.variable_scope("lstm", reuse=True) as lstm_scope:
         real_outputs, _ = tf.nn.dynamic_rnn(
             cell=lstm_cell,
             inputs=self.real_embeddings,
@@ -187,6 +188,7 @@ class DescriminativeModel(object):
             dtype=tf.float32,
             scope=lstm_scope)
 
+      with tf.variable_scope("lstm", reuse=True) as lstm_scope:
         fake_outputs, _ = tf.nn.dynamic_rnn(
             cell=lstm_cell,
             inputs=self.fake_embeddings,
@@ -233,11 +235,13 @@ class DescriminativeModel(object):
     shit_vectors = self.right_shift(real_vectors)
 
     def related_degree(a, b):
-      return tf.sigmoid(tf.reduce_sum(tf.multiply(a, b), 1))
+      c = tf.sigmoid(tf.reduce_sum(tf.multiply(a, b), 1))
+      return tf.clip_by_value(c, 1e-10, 1.0)
 
     def dist(a, b):
       return tf.reduce_sum(tf.abs(tf.subtract(a, b)), 1)
 
+    
     r_xr = related_degree(image_embeddings, real_vectors)
     r_xf = related_degree(image_embeddings, fake_vectors)
     r_xs = related_degree(image_embeddings, shit_vectors)
@@ -246,11 +250,13 @@ class DescriminativeModel(object):
     tf.summary.scalar("r_fake", tf.reduce_mean(r_xf))
 
     # Distance between fake and real using L2 norm.
-    d_rf = tf.reduce_sum(tf.square(tf.subtract(real_vectors, fake_vectors)), 1)
+    #d_rf = tf.reduce_sum(tf.square(tf.subtract(real_vectors, fake_vectors)), 1)
+    # Using L1 norm
+    d_rf = dist(real_vectors, fake_vectors)
 
     self.G_loss = -tf.log(r_xf) + d_rf
-    self.D_loss = -tf.log(r_xr) - tf.log(1 - r_xf) - tf.log(1 - r_xs)
-
+    self.D_loss = -tf.log(r_xr) - tf.log(tf.clip_by_value(1 - r_xf, 1e-10, 1.0)) - tf.log(tf.clip_by_value(1 - r_xs, 1e-10, 1.0))
+    
     '''
     d_xr = dist(image_embeddings, real_vectors)
     d_xf = dist(image_embeddings, fake_vectors)
@@ -269,7 +275,7 @@ class DescriminativeModel(object):
 
   def build(self, input_list):
     self.build_inputs(input_list)
-    self.build_image_embedding()
+    #self.build_image_embedding()
     self.build_seqs_embeddings()
     self.build_sentence_embeddings()
     self.build_model()

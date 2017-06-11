@@ -28,12 +28,19 @@ import descriminative_model
 
 FLAGS = tf.app.flags.FLAGS
 
+tf.flags.DEFINE_boolean("together", True, "Whether train D only or train D and G together")
+
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
 def main(unused_argv):
 
-  flags_number_of_steps = 1000000
+  if FLAGS.together:
+    print("==Train G and D together")
+    flags_number_of_steps = 3000
+  else:
+    print("==Train D only")
+    flags_number_of_steps = 20000
 
   model_config = configuration.ModelConfig()
   model_config.input_file_pattern = "/media/mazm13/mscoco/train-?????-of-00256"
@@ -70,11 +77,38 @@ def main(unused_argv):
     tf.summary.scalar("G_loss", G_loss)
     tf.summary.scalar("D_loss", D_loss)
 
-    G_train = tf.train.GradientDescentOptimizer(0.0002).minimize(G_loss, var_list=G_model.var_list)
-    D_train = tf.train.GradientDescentOptimizer(0.0002).minimize(D_loss, var_list=D_model.var_list)
-    
+    '''
+    #G_train = tf.train.GradientDescentOptimizer(0.0001).minimize(G_loss, var_list=G_model.var_list)
+    #D_train = tf.train.GradientDescentOptimizer(0.0001).minimize(D_loss, var_list=D_model.var_list)
+    G_train = tf.train.AdagradOptimizer(0.0001).minimize(G_loss, var_list=G_model.var_list)
+    D_train = tf.train.AdagradOptimizer(0.0001).minimize(D_loss, var_list=D_model.var_list)
+    '''
+    G_train = tf.contrib.layers.optimize_loss(
+        loss=G_loss,
+        global_step=G_model.global_step,
+        learning_rate=0.0001,
+        optimizer="SGD",
+        clip_gradients=5.0,
+        variables=G_model.var_list)
+
+    D_train = tf.contrib.layers.optimize_loss(
+        loss=D_loss,
+        global_step=G_model.global_step,
+        learning_rate=0.0001,
+        optimizer="SGD",
+        clip_gradients=5.0,
+        variables=D_model.var_list)
+
+
     saver = tf.train.Saver(max_to_keep=training_config.max_checkpoints_to_keep)
     merge = tf.summary.merge_all()
+
+    print("var in G_model:")
+    for var in G_model.var_list:
+      print(str(var.op.name))
+    print("var in D_model:")
+    for var in D_model.var_list:
+      print(str(var.op.name))
 
   with tf.Session(graph=g) as sess:
 
@@ -98,6 +132,9 @@ Initializing a new one.
       G_model.init_fn(sess)
       
 
+    saver.save(sess, train_dir+"model.ckpt", global_step=0)
+    return
+
     print("Starting the input queue runners...")
     coord = tf.train.Coordinator()
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
@@ -106,17 +143,15 @@ Initializing a new one.
     print("===Start training===")
     for step in xrange(flags_number_of_steps):
 
-      
-      _, summary_str = sess.run([G_train, merge])
-      writer.add_summary(summary_str, step)
+      if FLAGS.together:
+        _, summary_str = sess.run([G_train, merge])
+        writer.add_summary(summary_str, step)
 
-      _, summary_str = sess.run([D_train, merge])
+      _, summary_str, dloss = sess.run([D_train, merge, D_loss])
       writer.add_summary(summary_str, step)
-
-      _, summary_str = sess.run([D_train, merge])
-      writer.add_summary(summary_str, step)
+      print("step %d\t, G_loss: %f" % (step, dloss))
       
-      if np.mod(step, 100) == 0:
+      if FLAGS.together and (np.mod(step, 100) == 0):
         real, sentences, lens = sess.run([G_model.real_seqs, G_model.fake_seqs, G_model.fake_lens])
         for i in range(len(real)):
           real_sens = ""

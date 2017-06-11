@@ -5,6 +5,7 @@ from __future__ import print_function
 
 import tensorflow as tf
 import time
+import json
 
 import configuration
 import generative_model
@@ -45,8 +46,12 @@ Nothing was found in checkpoint directory.
     coord = tf.train.Coordinator()
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
 
+    counter = 0
+    step = 0
+    json_list = []
     print("===Start Evaluating===")
-    for step in range(20):
+    for step in range(1000):
+      print(step)
       start = time.time()
       tf.logging.info("Starting evaluation at " + time.strftime(
           "%Y-%m-%d-%H:%M:%S", time.localtime()))
@@ -57,16 +62,30 @@ Nothing was found in checkpoint directory.
         real_sens = ""
         for word_id in real[i]: 
           real_sens += G_model.vocab.id_to_word(word_id) + " "
-        print("Image id: [%d], Real: %s" % (image_ids[i], real_sens))
-        fake_sens = ""
-        for k in range(lens[i]):
-          fake_sens += G_model.vocab.id_to_word(sentences[i][k]) + " "
-        print("Fake(len:%d): %s" % (lens[i], fake_sens))
-        print("=========================")
+        #print("Image id: [%d], Real: %s" % (image_ids[i], real_sens))
 
+        fake_sens = ""
+        for k in range(1, lens[i]-1):
+          word = G_model.vocab.id_to_word(sentences[i][k])
+          fake_sens += word + " "
+        #json_dict = {"image_id":image_ids[i], "caption":fake_sens, 'human_caption': real_sens}
+        json_dict = {"image_id":image_ids[i], "caption":fake_sens}
+        json_list.append(json_dict)
+        #print("Fake(len:%d): %s" % (lens[i], fake_sens))
+        #print("=========================")
+
+      '''
       time_to_next_eval = start + flag_eval_interval_secs - time.time()
       if time_to_next_eval > 0:
         time.sleep(time_to_next_eval)
+      '''
+      counter += len(real)
+      step += 1
+
+    print("%d images in total were captioned")
+    #with open('/home/mazm13/server/CodeIgniter-3.1.4/json/mle_caption.json', 'w') as outfile:
+    with open('/home/mazm13/result/gan_caption.json', 'w') as outfile:
+      json.dump(json_list, outfile)
 
 
 if __name__ == "__main__":

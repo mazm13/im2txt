@@ -231,7 +231,8 @@ class GenerativeModel(object):
           activation_fn=None,
           weights_initializer=self.initializer,
           biases_initializer=None,
-          scope=scope)
+          scope=scope,
+          trainable=False)
 
     image_embedding_variables = tf.get_collection(
         tf.GraphKeys.GLOBAL_VARIABLES, scope="image_embedding")
@@ -261,6 +262,15 @@ class GenerativeModel(object):
       embedding_map = tf.get_variable("map")
       word_embedding_ = tf.nn.embedding_lookup(embedding_map, word_id)
     return word_embedding_
+
+  def word_probs_embedding(self, word_probs):
+    # word_probs is a float32 Tensor with shape [vocab_size,]
+    # change it to [1, vocab_size]
+    word_probs = tf.expand_dims(word_probs, 0)
+    with tf.variable_scope("seq_embedding", reuse=True), tf.device("/cpu:0"):
+      embedding_map = tf.get_variable("map")
+      word_embeddding_ = tf.matmul(word_probs, embedding_map)
+    return word_embeddding_
 
   def build_model(self):
     """Builds the model.
@@ -318,18 +328,24 @@ class GenerativeModel(object):
               weights_initializer=self.initializer,
               scope=logits_scope)
         # Multiply a \Beta before category distribution, \Beta = 3
-        logits = tf.nn.log_softmax(3 * logits[0])
+        logits = tf.nn.softmax(3 * logits[0])
 
+        logits = tf.log(tf.clip_by_value(logits, 1e-10, 1.0))
         # Do gumbel-softmax 
         gumbel_noise = np.random.gumbel(0.0,1.0,size=logits.get_shape())
         gumbel = logits + gumbel_noise
         index = tf.argmax(gumbel)
 
-        sentence_probs.append(tf.nn.softmax(gumbel / self.config.gumbel_temperature))
+        word_probs = tf.nn.softmax(gumbel / self.config.gumbel_temperature)
+        sentence_probs.append(word_probs)
 
         sentence.append(index)
 
-        lstm_inputs = self.word_embedding(index)
+        if self.mode == "train":
+          lstm_inputs = self.word_probs_embedding(word_probs)
+        else:
+          lstm_inputs = self.word_embedding(index)
+
         lstm_state = state_tuple
 
       # With considering that there is must no if condition in TensorFlow
@@ -397,9 +413,10 @@ class GenerativeModel(object):
 
   def output(self):
     real_lens = tf.reduce_sum(self.real_mask, 1)
-    return self.inception_output, self.real_seqs, real_lens, \
+#    return self.inception_output, self.real_seqs, real_lens, \
+#        self.fake_seqs_probs, self.fake_lens_tensor
+    return self.image_embeddings, self.real_seqs, real_lens, \
         self.fake_seqs_probs, self.fake_lens_tensor
-
   def build(self):
     """Creates all ops for training and evaluation."""
     self.build_inputs()
